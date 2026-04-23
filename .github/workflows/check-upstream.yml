@@ -1,0 +1,91 @@
+name: Check upstream swift-protobuf
+
+on:
+  schedule:
+    - cron: "0 9 * * MON"     # every Monday 09:00 UTC = 18:00 KST
+  workflow_dispatch: {}
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check upstream latest release vs our branch base
+        id: check_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/apple/swift-protobuf.git
+          git fetch upstream --tags --quiet
+
+          LATEST=$(git tag --sort=-v:refname | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+
+          # tag we branched from is the parent of the first commit on feat/public-enum-name
+          git checkout feat/public-enum-name
+          BASE_TAG=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || echo "unknown")
+          echo "base=$BASE_TAG" >> "$GITHUB_OUTPUT"
+
+          if [ "$LATEST" != "$BASE_TAG" ]; then
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check issue #872 status
+        id: check_issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          STATE=$(gh issue view 872 --repo apple/swift-protobuf --json state --jq '.state')
+          echo "state=$STATE" >> "$GITHUB_OUTPUT"
+
+      - name: File issue when stale or when upstream #872 closed
+        if: steps.check_release.outputs.stale == 'true' || steps.check_issue.outputs.state == 'CLOSED'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LATEST: ${{ steps.check_release.outputs.latest }}
+          BASE: ${{ steps.check_release.outputs.base }}
+          STATE: ${{ steps.check_issue.outputs.state }}
+        run: |
+          TITLE="swift-protobuf upstream update available (base=$BASE latest=$LATEST #872=$STATE)"
+          # Deduplicate — skip if an open issue with this title already exists
+          EXISTING=$(gh issue list --state open --search "in:title \"$TITLE\"" --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            echo "issue already exists: #$EXISTING"
+            exit 0
+          fi
+          BODY=$(cat <<BODY_END
+          Upstream [apple/swift-protobuf](https://github.com/apple/swift-protobuf) status:
+
+          - Latest release tag: \`$LATEST\`
+          - Our branch \`feat/public-enum-name\` is based on: \`$BASE\`
+          - Issue [#872](https://github.com/apple/swift-protobuf/issues/872) state: **$STATE**
+
+          ### Action
+
+          If the branch is stale, rebase:
+          \`\`\`bash
+          git fetch upstream --tags
+          git checkout feat/public-enum-name
+          git rebase $LATEST
+          git push -f origin feat/public-enum-name
+          \`\`\`
+
+          If \`#872\` is **CLOSED**, verify upstream added a public API
+          equivalent to our \`protoName\`. If so, drop the fork:
+          - Update \`apps/ios/project.yml\` back to \`apple/swift-protobuf\` with a tag pin.
+          - Delete \`kimchi-developer/swift-protobuf\` once no repo references it.
+
+          _Auto-opened by \`.github/workflows/check-upstream.yml\`._
+          BODY_END
+          )
+          gh issue create --title "$TITLE" --body "$BODY"
