@@ -56,6 +56,16 @@ extension Enum {
         return nameProviding._protobuf_nameMap.names(for: rawValue)?.proto
     }
 
+    /// The proto enum value name as declared in the `.proto` source
+    /// (e.g. `EXAM_TYPE_HEM`), matching both the text-format encoding and
+    /// the proto3 JSON encoding of this value.
+    ///
+    /// Returns `nil` for `UNRECOGNIZED` values or enum types that do not
+    /// provide a name map.
+    public var protoName: String? {
+        self.name?.description
+    }
+
     /// Internal convenience initializer that returns the enum value with the
     /// given name, if it provides names.
     ///
