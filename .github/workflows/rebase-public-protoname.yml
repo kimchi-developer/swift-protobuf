@@ -1,0 +1,49 @@
+name: Rebase public protoName fork
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly: Monday 18:00 UTC / Tuesday 03:00 KST.
+    - cron: "0 18 * * 1"
+
+permissions:
+  contents: write
+
+jobs:
+  rebase:
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out fork branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/public-enum-name
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream tags
+        run: |
+          git remote add upstream https://github.com/apple/swift-protobuf.git
+          git fetch upstream --tags
+          latest="$(git tag -l '1.*' --sort=-v:refname | head -1)"
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+        id: upstream
+
+      - name: Rebase on latest upstream release
+        run: |
+          latest="${{ steps.upstream.outputs.latest }}"
+          if git merge-base --is-ancestor "$latest" HEAD; then
+            echo "feat/public-enum-name already contains $latest"
+            exit 0
+          fi
+          git rebase "$latest"
+
+      - name: Build SwiftProtobuf
+        run: swift build
+
+      - name: Push rebased branch
+        run: git push --force-with-lease origin HEAD:feat/public-enum-name
